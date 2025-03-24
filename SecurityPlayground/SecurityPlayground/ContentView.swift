@@ -8,7 +8,6 @@
 import SwiftUI
 
 struct ContentView: View {
-    let asymKeyPair = AsymetricKeyPairProvider()
     var body: some View {
         VStack {
             Image(systemName: "globe")
