@@ -19,16 +19,26 @@ struct SecurityPlaygroundApp: App {
     
     func testCrypto() {
         let asymKeyPair = AsymetricKeyPairProvider()
-        let pubKey = asymKeyPair.getPublicKey()
         
         // Use this local authentication context to bypass Apple prompt when using the cryptographic key
-        //let context = LAContext()
-        //context.setCredential("password".data(using: .utf8), type: .applicationPassword)
-        //let retrievedKey = asymKeyPair.retrieveKey(context: context)
-        let retrievedKey = asymKeyPair.retrieveKey()
-
-        var signedMessage: Data?
-        try! signedMessage = asymKeyPair.sign(data: "abc", key: retrievedKey!)
-        print(signedMessage?.base64EncodedString())
+        let context = LAContext()
+        context.setCredential("password".data(using: .utf8), type: .applicationPassword)
+        
+        for _ in 0...5 {
+            // Pass a nil context to force Apple password prompt
+            testSignature(keyPair: asymKeyPair, message: "message", context: context)
+        }
+    }
+    
+    func testSignature(keyPair: AsymetricKeyPairProvider, message: String, context: LAContext? = nil) {
+        let messageData = message.data(using: .utf8)!
+        let privateKey = keyPair.getPrivateKey(context: context)!
+        let publicKey = keyPair.getPublicKey()
+        var signature: Data
+        try! signature = keyPair.sign(data: messageData, privateKey: privateKey)!
+        print(signature.base64EncodedString())
+        var isVerified: Bool
+        try! isVerified = keyPair.verify(data: messageData, publicKey: publicKey, signature: signature)
+        print(isVerified)
     }
 }

@@ -8,12 +8,23 @@
 import Foundation
 import LocalAuthentication
 
+struct KeyUsageError: Error {
+    enum ErrorKind {
+        case invalidAlgorithm
+    }
+
+    let description: String
+    let kind: ErrorKind
+}
+
 struct AsymetricKeyPairProvider: Any {
-    let secKeyAttrLabel = "com.bohrgu.secpg.asymkeypair.secureenclave.label"
-    let secKeyAttrTag = "com.bohrgu.secpg.asymkeypair.secureenclave.tag"
+    static let secKeyAttrLabel = "com.bohrgu.secpg.asymkeypair.secureenclave.label"
+    static let secKeyAttrTag = "com.bohrgu.secpg.asymkeypair.secureenclave.tag"
     let privateKeyRef: SecKey?
     
     init() {
+        AsymetricKeyPairProvider.deletePreviousKeyPair()
+        
         let accessControl = SecAccessControlCreateWithFlags(
             kCFAllocatorDefault,
             kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
@@ -27,12 +38,12 @@ struct AsymetricKeyPairProvider: Any {
             kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRandom,
             kSecAttrKeySizeInBits: 256,
             kSecAttrTokenID: kSecAttrTokenIDSecureEnclave,
-            kSecAttrLabel: secKeyAttrLabel,
+            kSecAttrLabel: AsymetricKeyPairProvider.secKeyAttrLabel,
             kSecClass: kSecClassKey,
             kSecUseAuthenticationContext: context,
             kSecPrivateKeyAttrs: [
                 kSecAttrIsPermanent: true,
-                kSecAttrApplicationTag: secKeyAttrTag,
+                kSecAttrApplicationTag: AsymetricKeyPairProvider.secKeyAttrTag,
                 kSecAttrAccessControl: accessControl
             ]
         ]
@@ -47,14 +58,25 @@ struct AsymetricKeyPairProvider: Any {
         self.privateKeyRef = privateKey
     }
     
-    func getPublicKey() -> SecKey {
-        return SecKeyCopyPublicKey(self.privateKeyRef!)!
+    static func deletePreviousKeyPair() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassKey,
+            kSecAttrLabel as String: AsymetricKeyPairProvider.secKeyAttrLabel
+        ]
+        
+        let status = SecItemDelete(query as CFDictionary)
+        if (status == errSecSuccess) {
+            print("Previous key pair deleted")
+        }
+        else if (status == errSecItemNotFound) {
+            print("No previous key pair found")
+        }
     }
     
-    func retrieveKey(context: LAContext? = nil) -> SecKey? {
+    func getPrivateKey(context: LAContext? = nil) -> SecKey? {
         var attributes: [String: Any] = [
             kSecClass as String: kSecClassKey,
-            kSecAttrLabel as String: secKeyAttrLabel,
+            kSecAttrLabel as String: AsymetricKeyPairProvider.secKeyAttrLabel,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnRef as String: true,
         ]
@@ -64,26 +86,48 @@ struct AsymetricKeyPairProvider: Any {
         }
         
         var item: CFTypeRef?
-        let res = SecItemCopyMatching(attributes as CFDictionary, &item)
+        let status = SecItemCopyMatching(attributes as CFDictionary, &item)
         
-        if (res == errSecSuccess) {
+        if (status == errSecSuccess) {
             return (item as! SecKey)
         } else {
             return nil
         }
     }
     
-    func sign(data: String, key: SecKey) throws -> Data? {
-        if (SecKeyIsAlgorithmSupported(key, .sign, .ecdsaSignatureMessageX962SHA256)) {
+    func getPublicKey() -> SecKey {
+        return SecKeyCopyPublicKey(self.privateKeyRef!)!
+    }
+    
+    func sign(data: Data, privateKey: SecKey) throws -> Data? {
+        if (SecKeyIsAlgorithmSupported(privateKey, .sign, .ecdsaSignatureMessageX962SHA256)) {
             var error: Unmanaged<CFError>?
-            guard let signature = SecKeyCreateSignature(key,
+            guard let signature = SecKeyCreateSignature(privateKey,
                                                         .ecdsaSignatureMessageX962SHA256,
-                                                        data.data(using: .utf8)! as CFData,
+                                                        data as CFData,
                                                         &error) as Data? else {
                 throw error!.takeRetainedValue() as Error
             }
             return signature
         }
         return nil
+    }
+    
+    func verify(data: Data, publicKey: SecKey, signature: Data) throws -> Bool {
+        guard SecKeyIsAlgorithmSupported(publicKey, .verify, .ecdsaSignatureMessageX962SHA256) else {
+            throw KeyUsageError(description: "Invalid algorithm", kind: .invalidAlgorithm)
+        }
+        
+        var error: Unmanaged<CFError>?
+        guard SecKeyVerifySignature(publicKey,
+                                    .ecdsaSignatureMessageX962SHA256,
+                                    data as CFData,
+                                    signature as CFData,
+                                    &error) else {
+            let printableError = error!.takeRetainedValue() as Error
+            print(printableError)
+            return false
+        }
+        return true
     }
 }
